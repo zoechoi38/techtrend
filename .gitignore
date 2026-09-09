@@ -4,4 +4,3 @@ __pycache__/
 raw_data/
 crawler.log
 .env
-db_connect.py
