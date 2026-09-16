@@ -63,7 +63,8 @@ if page == "메인 대시보드":
     df = load_trend_stats()
     filtered = df[df["job_category"] == job_category].copy()
 
-    # 이번 달 데이터
+    # 이번 주 데이터 (year_month는 그 주의 월요일 날짜, YYYY-MM-DD 형식이라
+    # 문자열 비교(max/min)만으로도 날짜순 정렬이 그대로 유지됨)
     latest_month = filtered["year_month"].max()
     prev_month = filtered[filtered["year_month"] < latest_month]["year_month"].max() if len(filtered["year_month"].unique()) > 1 else None
 
@@ -101,7 +102,7 @@ if page == "메인 대시보드":
         latest["요구 비율(%)"] = (latest["total_ratio"] * 100).round(2)
         latest["필수 비율(%)"] = (latest["required_ratio"] * 100).round(2)
 
-        # 전월 대비 변화율
+        # 전주 대비 변화율
         if prev_month:
             prev_df = filtered[filtered["year_month"] == prev_month].groupby("keyword")["total_ratio"].mean()
             latest["변화율(%)"] = latest.apply(
@@ -117,7 +118,7 @@ if page == "메인 대시보드":
 
         latest = latest.sort_values("요구 비율(%)", ascending=False)
 
-        st.subheader(f"{job_category} 기술 스택 현황 ({latest_month})")
+        st.subheader(f"{job_category} 기술 스택 현황 ({latest_month} 주)")
         st.dataframe(
             latest[["keyword", "요구 비율(%)", "필수 비율(%)", "변화율(%)", "트렌드"]].rename(
                 columns={"keyword": "기술"}
@@ -128,7 +129,7 @@ if page == "메인 대시보드":
 # ── SCREEN-02 트렌드 분석 ─────────────────────
 elif page == "트렌드 분석":
     st.title("📈 트렌드 분석")
-    st.caption("직무별 기술 스택 월별 요구 비율 변화")
+    st.caption("직무별 기술 스택 주별 요구 비율 변화")
 
     job_category = st.selectbox("직무 선택", JOB_CATEGORIES)
     df = load_trend_stats()
@@ -144,7 +145,9 @@ elif page == "트렌드 분석":
         if selected:
             chart_df = filtered[filtered["keyword"].isin(selected)].copy()
             chart_df["요구 비율(%)"] = (chart_df["total_ratio"] * 100).round(2)
-            chart_df["year_month"] = pd.to_datetime(chart_df["year_month"] + "-01")
+            # year_month가 이미 "그 주의 월요일" 완전한 날짜(YYYY-MM-DD)라
+            # "-01"을 붙이지 않고 바로 파싱한다.
+            chart_df["year_month"] = pd.to_datetime(chart_df["year_month"])
 
             fig = px.line(
                 chart_df,
@@ -153,7 +156,7 @@ elif page == "트렌드 분석":
                 color="keyword",
                 markers=True,
                 title=f"{job_category} 기술 스택 트렌드",
-                labels={"year_month": "월", "keyword": "기술"}
+                labels={"year_month": "주", "keyword": "기술"}
             )
             st.plotly_chart(fig, use_container_width=True)
 
@@ -194,7 +197,7 @@ elif page == "필수·우대 분석":
 # ── SCREEN-04 수요 예측 ───────────────────────
 elif page == "수요 예측":
     st.title("🔮 수요 예측")
-    st.caption("향후 6개월 기술 수요 예측 (선형 회귀 / Random Forest 자동 선택)")
+    st.caption("향후 8주 기술 수요 예측 (선형 회귀 / Random Forest 자동 선택)")
 
     # 모델 성능 비교 섹션
     st.subheader("📊 모델 성능 비교")
@@ -269,7 +272,8 @@ elif page == "수요 예측":
 
         actual = filtered[filtered["keyword"] == keyword].copy()
         actual = actual.groupby("year_month")["total_ratio"].mean().reset_index()
-        actual["날짜"] = pd.to_datetime(actual["year_month"] + "-01")
+        # year_month가 이미 완전한 날짜(YYYY-MM-DD)이므로 "-01" 없이 바로 파싱
+        actual["날짜"] = pd.to_datetime(actual["year_month"])
         actual["요구 비율(%)"] = (actual["total_ratio"] * 100).round(2)
         actual = actual.sort_values("날짜")
 
@@ -291,7 +295,8 @@ elif page == "수요 예측":
         ))
 
         if not forecast.empty:
-            forecast["날짜"] = pd.to_datetime(forecast["target_month"] + "-01")
+            # target_month도 이제 완전한 날짜(YYYY-MM-DD)라 "-01" 없이 바로 파싱
+            forecast["날짜"] = pd.to_datetime(forecast["target_month"])
             forecast["요구 비율(%)"] = (forecast["predicted_ratio"] * 100).round(2)
             forecast["하한(%)"] = (forecast["lower_bound"] * 100).round(2)
             forecast["상한(%)"] = (forecast["upper_bound"] * 100).round(2)
@@ -335,7 +340,7 @@ elif page == "수요 예측":
                 line_dash="dash",
                 line_color="gray",
                 annotation_text="예측 시작",
-                annotation_position="top"
+                annotation_position="bottom"
             )
 
         fig.update_layout(
