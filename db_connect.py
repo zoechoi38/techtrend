@@ -7,7 +7,7 @@ def get_connection():
         port=int(os.environ.get("DB_PORT", 5432)),
         database=os.environ.get("DB_NAME", "postgres"),
         user=os.environ.get("DB_USER", "postgres.foxjvjqadxjsnbjjrtqw"),
-        password=os.environ.get("DB_PASSWORD", "Ghkdbs0830!")
+        password=os.environ.get("DB_PASSWORD", "Qweryun123456!")
     )
     return conn
 

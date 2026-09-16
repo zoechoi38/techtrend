@@ -178,11 +178,20 @@ elif page == "필수·우대 분석":
     if filtered.empty:
         st.warning("해당 직무의 데이터가 없습니다.")
     else:
-        filtered["필수 비율"] = filtered["required_ratio"]
-        filtered["우대 비율"] = filtered["total_ratio"] - filtered["required_ratio"]
+        # 키워드별로 여러 주(week)의 데이터가 쌓여있으므로, 먼저 평균을 낸 뒤
+        # 그래프를 그려야 한다. 원본을 그대로 넘기면 같은 키워드의 여러 주치
+        # 막대가 계속 누적(stack)되어 필수 비율만 과도하게 커지고
+        # 우대 비율은 상대적으로 묻혀 보이지 않는 문제가 있었다.
+        agg = filtered.groupby("keyword").agg(
+            required_ratio=("required_ratio", "mean"),
+            total_ratio=("total_ratio", "mean")
+        ).reset_index()
+
+        agg["필수 비율"] = agg["required_ratio"]
+        agg["우대 비율"] = agg["total_ratio"] - agg["required_ratio"]
 
         fig = px.bar(
-            filtered,
+            agg,
             x="keyword",
             y=["필수 비율", "우대 비율"],
             title=f"{job_category} 필수·우대 비율",
