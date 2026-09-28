@@ -1,15 +1,25 @@
-import psycopg2
 import os
+import psycopg2
+
+# 로컬에서는 .env 파일을 읽고, 배포 환경(Streamlit Cloud)에서는 Secrets가
+# 환경변수로 들어오므로 dotenv가 없어도 동작하게 처리
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 def get_connection():
-    conn = psycopg2.connect(
-        host=os.environ.get("DB_HOST", "aws-0-ap-northeast-2.pooler.supabase.com"),
-        port=int(os.environ.get("DB_PORT", 5432)),
-        database=os.environ.get("DB_NAME", "postgres"),
-        user=os.environ.get("DB_USER", "postgres.foxjvjqadxjsnbjjrtqw"),
-        password=os.environ.get("DB_PASSWORD", "Qweryun123456!")
+    # 기본값을 두지 않는다: 값이 없으면 KeyError로 바로 드러나게 함
+    return psycopg2.connect(
+        host=os.environ["DB_HOST"],
+        port=int(os.environ["DB_PORT"]),
+        database=os.environ["DB_NAME"],
+        user=os.environ["DB_USER"],
+        password=os.environ["DB_PASSWORD"],
     )
-    return conn
+
 
 if __name__ == "__main__":
     try:
