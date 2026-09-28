@@ -2,15 +2,21 @@ import re
 from db_connect import get_connection
 
 # ── 기술 스택 키워드 사전 ─────────────────────────
+# 본문 전체를 검사하기 시작하면서 오탐이 생기던 패턴을 고쳤다:
+#   Java : "자바스크립트"에 걸리지 않게 함
+#   Vue  : "인터뷰", "리뷰"의 "뷰"에 걸리지 않게 함
+#   Node : "쿠버네티스 노드"의 "노드"에 걸리지 않도록 한글 패턴 제거
+#   Go   : 영어 문장의 "go"에 걸리지 않게 대문자 "Go"만 인정
+#   JS/TS: "Node.js", "Vue.js"의 ".js"에 걸려 JavaScript로 잘못 집계되던 문제
 TECH_KEYWORDS = {
     # 언어
     "Python": [r"python", r"파이썬"],
-    "Java": [r"\bjava\b", r"자바"],
-    "JavaScript": [r"javascript", r"\bjs\b", r"자바스크립트"],
-    "TypeScript": [r"typescript", r"\bts\b", r"타입스크립트"],
+    "Java": [r"\bjava\b", r"자바(?!\s*스크립트)"],
+    "JavaScript": [r"javascript", r"(?<![\w.])js\b", r"자바스크립트"],
+    "TypeScript": [r"typescript", r"(?<![\w.])ts\b", r"타입스크립트"],
     "Kotlin": [r"kotlin", r"코틀린"],
     "Swift": [r"swift"],
-    "Go": [r"\bgolang\b", r"\bgo\b"],
+    "Go": [r"\bgolang\b", r"(?-i:\bGo\b)"],
     "C++": [r"c\+\+", r"\bcpp\b"],
     "C#": [r"c#"],
     "Scala": [r"scala"],
@@ -24,14 +30,14 @@ TECH_KEYWORDS = {
     "Django": [r"django", r"장고"],
     "FastAPI": [r"fastapi"],
     "Flask": [r"\bflask\b"],
-    "Node.js": [r"node\.js", r"nodejs", r"노드"],
+    "Node.js": [r"node\.js", r"nodejs"],
     "NestJS": [r"nestjs", r"nest\.js"],
     "Express": [r"express\.js", r"\bexpress\b"],
     "Laravel": [r"laravel"],
 
     # 프론트엔드
     "React": [r"\breact\b", r"리액트"],
-    "Vue": [r"\bvue\b", r"뷰"],
+    "Vue": [r"\bvue\b", r"(?<![가-힣])뷰(?:를|는|와|과|로|가|도|의)?(?![가-힣])"],
     "Angular": [r"angular", r"앵귤러"],
     "Next.js": [r"next\.js", r"nextjs"],
     "Nuxt.js": [r"nuxt\.js", r"nuxtjs"],
@@ -93,30 +99,53 @@ TECH_KEYWORDS = {
     "WebSocket": [r"websocket", r"웹소켓"],
 }
 
-REQUIRED_PATTERNS = [
-    r"자격\s*요건", r"필수\s*사항", r"필수\s*역량",
-    r"필수\s*조건", r"주요\s*업무", r"담당\s*업무"
-]
-
-PREFERRED_PATTERNS = [
-    r"우대\s*사항", r"우대\s*조건", r"우대\s*역량", r"우대"
+# ── 섹션 제목 ─────────────────────────────────────
+# 실제 사람인 공고 본문을 확인해 보니 "주요업무 / 자격요건 / 우대사항" 같은
+# 제목이 일관되게 붙어 있다. 단어 하나("우대", "필수")로 나누면
+# "이력서 (필수)", "보훈대상자 우대"처럼 다른 뜻에 걸리므로 제목 형태만 인정한다.
+SECTION_HEADERS = [
+    ("preferred", re.compile(r"우대\s*(?:사항|조건|역량|요건)")),
+    ("required", re.compile(
+        r"자격\s*요건|지원\s*자격|필수\s*(?:사항|역량|조건|요건)|주요\s*업무|담당\s*업무"
+    )),
+    # 기술 스택과 무관한 섹션: 이 구간의 키워드는 필수/우대 어느 쪽에도 넣지 않는다
+    ("ignore", re.compile(
+        r"근무\s*조건|근무\s*환경|전형\s*절차|채용\s*절차|접수\s*기간|접수\s*방법"
+        r"|지원\s*방법|제출\s*서류|복리\s*후생"
+    )),
 ]
 
 
 def split_required_preferred(text):
-    """텍스트를 필수·우대 섹션으로 분리"""
+    """
+    본문을 섹션 제목 기준으로 (필수 텍스트, 우대 텍스트)로 나눈다.
+      - 첫 제목 앞(공고 제목, 회사 소개): 필수로 본다
+      - 자격요건 / 주요업무 / 담당업무 섹션: 필수
+      - 우대사항 섹션: 우대
+      - 근무조건 / 전형절차 등: 제외
+    제목이 하나도 없으면 전체를 필수로 본다(우대를 구분할 근거가 없으므로).
+    """
     if not text:
+        return "", ""
+
+    marks = []
+    for kind, pattern in SECTION_HEADERS:
+        for match in pattern.finditer(text):
+            marks.append((match.start(), match.end(), kind))
+    if not marks:
         return text, ""
 
-    preferred_start = len(text)
-    for pattern in PREFERRED_PATTERNS:
-        matches = list(re.finditer(pattern, text, re.IGNORECASE))
-        if matches:
-            preferred_start = min(preferred_start, matches[0].start())
-
-    required_text = text[:preferred_start]
-    preferred_text = text[preferred_start:]
-    return required_text, preferred_text
+    marks.sort()
+    required_parts = [text[:marks[0][0]]]
+    preferred_parts = []
+    for i, (_, end, kind) in enumerate(marks):
+        next_start = marks[i + 1][0] if i + 1 < len(marks) else len(text)
+        section = text[end:next_start]
+        if kind == "required":
+            required_parts.append(section)
+        elif kind == "preferred":
+            preferred_parts.append(section)
+    return " ".join(required_parts), " ".join(preferred_parts)
 
 
 def extract_keywords(text):
@@ -170,7 +199,7 @@ def process_postings():
             if not all_keywords:
                 continue
 
-            # 저장
+            # 저장 (필수 섹션에도 나온 키워드는 필수로 본다)
             for keyword in all_keywords:
                 is_required = keyword in required_keywords
                 cur.execute("""

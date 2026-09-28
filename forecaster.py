@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from collections import Counter
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
@@ -8,9 +9,39 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
+class LastValueModel:
+    """기준선: 직전 값이 그대로 이어진다고 예측 (naive forecast)."""
+    def fit(self, X, y):
+        self.value_ = float(y[-1])
+        return self
+
+    def predict(self, X):
+        return np.full(len(X), self.value_)
+
+
+class MovingAverageModel:
+    """기준선: 최근 window개 값의 평균이 이어진다고 예측."""
+    def __init__(self, window=3):
+        self.window = window
+
+    def fit(self, X, y):
+        self.value_ = float(np.mean(y[-self.window:]))
+        return self
+
+    def predict(self, X):
+        return np.full(len(X), self.value_)
+
+
 # 모델을 인스턴스가 아니라 팩토리(생성 함수)로 관리
 # -> walk-forward validation 중 매 폴드마다 새로운 모델을 학습해야 하므로
+#
+# 데이터가 8주 안팎으로 짧아서 추세를 읽는 모델은 잡음을 추세로 착각해 오히려 불리하다.
+# 그래서 단순 기준선(직전 값, 최근 평균)도 같은 검증에 넣어, 기준선을 이기지 못하는
+# 모델이 "최적 모델"로 뽑히지 않게 한다. 오차가 같으면 앞에 있는 모델이 선택되므로
+# 가장 단순한 기준선을 맨 앞에 둔다.
 MODELS = {
+    "naive_last": lambda: LastValueModel(),
+    "moving_avg_3": lambda: MovingAverageModel(3),
     "linear_regression": lambda: LinearRegression(),
     "ridge": lambda: Ridge(alpha=1.0),
     "random_forest": lambda: RandomForestRegressor(n_estimators=100, random_state=42)
@@ -86,6 +117,7 @@ def run_forecast():
 
     saved = 0
     skipped_short = 0
+    chosen_counts = Counter()
     groups = df.groupby(["job_category", "keyword"])
 
     for (job_category, keyword), group in groups:
@@ -126,6 +158,7 @@ def run_forecast():
         best_name = min(cv_results, key=lambda k: cv_results[k]["mse"])
         best_mse = cv_results[best_name]["mse"]
         best_r2 = cv_results[best_name]["r2"]
+        chosen_counts[best_name] += 1
 
         print(f"  [{job_category}] {keyword} → {best_name} "
               f"(OOS R²={best_r2:.3f}, OOS MSE={best_mse:.5f}, folds={cv_results[best_name]['n_folds']})")
@@ -180,6 +213,10 @@ def run_forecast():
 
     cur.close()
     conn.close()
+    print("\n=== 계열별로 최종 선택된 모델 ===")
+    for name, count in chosen_counts.most_common():
+        print(f"  {name}: {count}개")
+
     print(f"\n완료! 총 {saved}개 예측 결과 저장")
 
 

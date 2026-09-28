@@ -6,6 +6,10 @@ import json
 import os
 import logging
 from db_connect import get_connection
+from saramin_utils import (
+    canonical_saramin_url, parse_list_date, extract_rec_idx,
+    fetch_saramin_body, needs_body,
+)
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
@@ -33,6 +37,21 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 }
 
+# 사이트가 요청을 제한(403/429)하면 그날은 본문 수집을 멈춘다
+fetch_state = {"blocked": False}
+
+
+def load_known_bodies():
+    """이미 본문을 받아 둔 사람인 공고 {post_url: content}. 같은 공고를 다시 요청하지 않기 위함."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT post_url, content FROM job_postings WHERE source = '사람인'")
+    bodies = {url: content for url, content in cur.fetchall() if not needs_body(content)}
+    cur.close()
+    conn.close()
+    return bodies
+
+
 def save_raw_json(postings, source, job_category):
     today = date.today().strftime("%Y-%m-%d")
     folder = f"raw_data/{today}"
@@ -58,7 +77,8 @@ def get_driver():
     )
     return driver
 
-def crawl_saramin(job_category, keyword, pages=3):
+def crawl_saramin(job_category, keyword, pages=3, bodies=None):
+    bodies = bodies if bodies is not None else {}
     postings = []
     logger.info(f"사람인 크롤링 시작: {job_category} / {keyword}")
 
@@ -79,24 +99,44 @@ def crawl_saramin(job_category, keyword, pages=3):
                     if not title_tag:
                         continue
                     title = title_tag.get_text(strip=True)
-                    post_url = "https://www.saramin.co.kr" + title_tag["href"]
+
+                    # 검색마다 바뀌는 파라미터(search_uuid 등)를 제거해 같은 공고는
+                    # 항상 같은 URL로 저장한다 -> DB의 중복 방지가 정상 동작
+                    post_url = canonical_saramin_url(
+                        "https://www.saramin.co.kr" + title_tag["href"]
+                    )
 
                     company_tag = item.select_one(".corp_name a")
                     company_name = company_tag.get_text(strip=True) if company_tag else "unknown"
 
-                    skill_tags = item.select(".job_sector span") or item.select(".job_sector a")
-                    skill_text = " ".join([tag.get_text(strip=True) for tag in skill_tags])
+                    # 목록에 표시된 실제 등록일/수정일. 못 찾으면 수집일로 대체
+                    _, listed_date = parse_list_date(item.get_text(" ", strip=True))
+                    posted_date = listed_date or date.today()
+
+                    # 상세 본문: 이미 받아 둔 공고는 재사용하고, 새 공고만 요청한다
+                    content = bodies.get(post_url, "")
+                    rec_idx = extract_rec_idx(post_url)
+                    if post_url not in bodies and rec_idx and not fetch_state["blocked"]:
+                        status, body = fetch_saramin_body(rec_idx)
+                        time.sleep(1)
+                        if status in (403, 429):
+                            fetch_state["blocked"] = True
+                            logger.error(f"사람인 본문 요청 제한(status={status}), 오늘은 본문 수집 중단")
+                        elif body is not None:
+                            content = body
+                            bodies[post_url] = body
 
                     postings.append({
                         "source": "사람인",
                         "job_category": job_category,
                         "company_name": company_name,
                         "title": title,
-                        "content": skill_text,
+                        "content": content,
                         "post_url": post_url,
-                        "posted_date": str(date.today())
+                        "posted_date": str(posted_date)
                     })
                 except Exception as e:
+                    logger.error(f"사람인 공고 파싱 오류: {e}")
                     continue
 
             print(f"  {page}페이지 완료 ({len(items)}개)")
@@ -205,11 +245,12 @@ def save_to_db(postings):
     saved = 0
     for p in postings:
         try:
+            # 충돌 대상을 지정하지 않아 어떤 UNIQUE 제약이든 중복이면 건너뜀
             cur.execute("""
                 INSERT INTO job_postings
                     (source, job_category, company_name, title, content, post_url, posted_date, collected_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-                ON CONFLICT (post_url) DO NOTHING
+                ON CONFLICT DO NOTHING
             """, (p["source"], p["job_category"], p["company_name"],
                   p["title"], p["content"], p["post_url"], p["posted_date"]))
             saved += cur.rowcount
@@ -227,9 +268,10 @@ if __name__ == "__main__":
     total = 0
 
     print("=== 사람인 수집 시작 ===")
+    bodies = load_known_bodies()
     for job_category, keyword in JOB_CATEGORIES.items():
         print(f"\n[{job_category}] 크롤링 시작...")
-        postings = crawl_saramin(job_category, keyword, pages=3)
+        postings = crawl_saramin(job_category, keyword, pages=3, bodies=bodies)
         save_raw_json(postings, "saramin", job_category)
         saved = save_to_db(postings)
         print(f"  수집 {len(postings)}개 / 저장 {saved}개")

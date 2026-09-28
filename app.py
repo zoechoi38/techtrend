@@ -208,7 +208,7 @@ elif page == "필수·우대 분석":
 # ── SCREEN-04 수요 예측 ───────────────────────
 elif page == "수요 예측":
     st.title("🔮 수요 예측")
-    st.caption("향후 8주 기술 수요 예측 (선형 회귀 / Random Forest 자동 선택)")
+    st.caption("향후 8주 기술 수요 예측 — 기술마다 여러 모델과 단순 기준선(직전 값·최근 평균) 중 검증 오차가 가장 작은 방식을 자동 선택")
 
     # 모델 성능 비교 섹션
     st.subheader("📊 모델 성능 비교")
@@ -230,7 +230,7 @@ elif page == "수요 예측":
     if not model_df.empty:
         model_df["평균 R²"] = model_df["avg_r2"].round(3)
         model_df["평균 MSE"] = model_df["avg_mse"].round(5)
-        model_df["사용 횟수"] = model_df["cnt"]
+        model_df["평가 계열 수"] = model_df["cnt"]
         model_df["모델명"] = model_df["model_name"]
 
         col1, col2 = st.columns(2)
@@ -242,7 +242,7 @@ elif page == "수요 예측":
                 y="평균 R²",
                 title="모델별 평균 R² (높을수록 좋음)",
                 color="모델명",
-                color_discrete_sequence=["#2ecc71", "#3498db", "#e74c3c"]
+                color_discrete_sequence=["#95a5a6", "#f1c40f", "#2ecc71", "#3498db", "#e74c3c"]
             )
             fig_r2.update_layout(showlegend=False)
             st.plotly_chart(fig_r2, use_container_width=True)
@@ -254,13 +254,13 @@ elif page == "수요 예측":
                 y="평균 MSE",
                 title="모델별 평균 MSE (낮을수록 좋음)",
                 color="모델명",
-                color_discrete_sequence=["#2ecc71", "#3498db", "#e74c3c"]
+                color_discrete_sequence=["#95a5a6", "#f1c40f", "#2ecc71", "#3498db", "#e74c3c"]
             )
             fig_mse.update_layout(showlegend=False)
             st.plotly_chart(fig_mse, use_container_width=True)
 
         st.dataframe(
-            model_df[["모델명", "평균 R²", "평균 MSE", "사용 횟수"]],
+            model_df[["모델명", "평균 R²", "평균 MSE", "평가 계열 수"]],
             use_container_width=True,
             hide_index=True
         )
