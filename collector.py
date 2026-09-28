@@ -23,6 +23,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 원티드는 현재 수집이 거의 되지 않는다(DB에 43건). 결정이 나기 전까지는 그대로 켜 둔다.
+COLLECT_WANTED = True
+
 JOB_CATEGORIES = {
     "백엔드 개발자": "백엔드",
     "프론트엔드 개발자": "프론트엔드",
@@ -263,30 +266,52 @@ def save_to_db(postings):
     conn.close()
     return saved
 
-if __name__ == "__main__":
+def run_collection():
+    """
+    사람인 -> 원티드 순으로 수집해 DB에 저장하고, 새로 저장된 총 개수를 돌려준다.
+    직무 하나가 실패해도 나머지는 계속 진행한다.
+    """
+    # 프로세스가 계속 떠 있는 스케줄러에서는 어제 걸린 요청 제한 표시가 남아 있으면
+    # 본문 수집이 영원히 멈추므로, 수집을 시작할 때마다 초기화한다.
+    fetch_state["blocked"] = False
     logger.info("=== 수집 시작 ===")
     total = 0
 
     print("=== 사람인 수집 시작 ===")
+    # 이미 본문을 받아 둔 공고는 다시 요청하지 않는다(새 공고만 요청)
     bodies = load_known_bodies()
     for job_category, keyword in JOB_CATEGORIES.items():
         print(f"\n[{job_category}] 크롤링 시작...")
-        postings = crawl_saramin(job_category, keyword, pages=3, bodies=bodies)
-        save_raw_json(postings, "saramin", job_category)
-        saved = save_to_db(postings)
-        print(f"  수집 {len(postings)}개 / 저장 {saved}개")
-        total += saved
+        try:
+            postings = crawl_saramin(job_category, keyword, pages=3, bodies=bodies)
+            save_raw_json(postings, "saramin", job_category)
+            saved = save_to_db(postings)
+            print(f"  수집 {len(postings)}개 / 저장 {saved}개")
+            total += saved
+        except Exception as e:
+            logger.exception(f"사람인 수집 실패: {job_category}")
+            print(f"  사람인 수집 실패: {e}")
         time.sleep(2)
 
-    print("\n=== 원티드 수집 시작 ===")
-    for job_category, keyword in JOB_CATEGORIES.items():
-        print(f"\n[{job_category}] 크롤링 시작...")
-        postings = crawl_wanted(job_category, keyword, pages=3)
-        save_raw_json(postings, "wanted", job_category)
-        saved = save_to_db(postings)
-        print(f"  수집 {len(postings)}개 / 저장 {saved}개")
-        total += saved
-        time.sleep(2)
+    if COLLECT_WANTED:
+        print("\n=== 원티드 수집 시작 ===")
+        for job_category, keyword in JOB_CATEGORIES.items():
+            print(f"\n[{job_category}] 크롤링 시작...")
+            try:
+                postings = crawl_wanted(job_category, keyword, pages=3)
+                save_raw_json(postings, "wanted", job_category)
+                saved = save_to_db(postings)
+                print(f"  수집 {len(postings)}개 / 저장 {saved}개")
+                total += saved
+            except Exception as e:
+                logger.exception(f"원티드 수집 실패: {job_category}")
+                print(f"  원티드 수집 실패: {e}")
+            time.sleep(2)
 
     logger.info(f"=== 수집 완료: 총 {total}개 ===")
     print(f"\n전체 완료! 총 {total}개 저장")
+    return total
+
+
+if __name__ == "__main__":
+    run_collection()

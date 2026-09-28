@@ -113,7 +113,9 @@ def run_forecast():
     df = pd.DataFrame(rows, columns=["job_category", "keyword", "year_month", "total_ratio"])
     print(f"예측할 데이터: {len(df)}개")
 
-    cur.execute("TRUNCATE TABLE model_stats")
+    # 예측 결과는 매번 전체를 다시 만든다. 파이프라인이 run_forecast()를 직접 부를 때도
+    # 예측이 중복으로 쌓이지 않도록 함수 안에서 함께 비운다.
+    cur.execute("TRUNCATE TABLE model_stats, forecasts")
 
     saved = 0
     skipped_short = 0
@@ -222,10 +224,4 @@ def run_forecast():
 
 if __name__ == "__main__":
     print("=== 수요 예측 시작 ===")
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("TRUNCATE TABLE forecasts")
-    conn.commit()
-    cur.close()
-    conn.close()
     run_forecast()
