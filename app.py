@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import plotly.express as px
 import pandas as pd
@@ -69,9 +70,30 @@ def load_dictionary_watch():
 # 요구 비율의 의미 (analyzer.py의 ONLY_POSTINGS_WITH_TECH = True 기준)
 RATIO_NOTE = "요구 비율 = 기술 스택이 언급된 공고 중, 해당 기술이 나온 공고의 비율"
 
+def _get_admin_password():
+    """배포 환경(Streamlit Cloud Secrets)과 로컬(.env) 둘 다 지원한다."""
+    try:
+        return st.secrets["ADMIN_PASSWORD"]
+    except Exception:
+        return os.environ.get("ADMIN_PASSWORD")
+
+
 # ── 네비게이션 ────────────────────────────────
 st.sidebar.title("기술 스택 트렌드")
-page = st.sidebar.radio("메뉴", ["메인 대시보드", "트렌드 분석", "필수·우대 분석", "수요 예측", "사전 점검"])
+
+# "사전 점검"은 개발용 내부 화면이라 비밀번호를 아는 사람에게만 메뉴에 보이게 한다.
+# 비밀번호가 틀리거나 설정 자체가 없으면 그 탭은 메뉴 목록에 아예 나타나지 않는다.
+_admin_password = _get_admin_password()
+if _admin_password and not st.session_state.get("is_admin"):
+    with st.sidebar.expander("🔒 관리자"):
+        entered = st.text_input("비밀번호", type="password", key="admin_pw_input")
+        if entered and entered == _admin_password:
+            st.session_state["is_admin"] = True
+            st.rerun()
+_menu_options = ["메인 대시보드", "트렌드 분석", "필수·우대 분석", "수요 예측"]
+if st.session_state.get("is_admin"):
+    _menu_options.append("사전 점검")
+page = st.sidebar.radio("메뉴", _menu_options)
 
 JOB_CATEGORIES = [
     "백엔드 개발자", "프론트엔드 개발자", "데이터 엔지니어",
