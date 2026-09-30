@@ -1,103 +1,8 @@
 import re
+import sys
+from psycopg2.extras import execute_values
 from db_connect import get_connection
-
-# ── 기술 스택 키워드 사전 ─────────────────────────
-# 본문 전체를 검사하기 시작하면서 오탐이 생기던 패턴을 고쳤다:
-#   Java : "자바스크립트"에 걸리지 않게 함
-#   Vue  : "인터뷰", "리뷰"의 "뷰"에 걸리지 않게 함
-#   Node : "쿠버네티스 노드"의 "노드"에 걸리지 않도록 한글 패턴 제거
-#   Go   : 영어 문장의 "go"에 걸리지 않게 대문자 "Go"만 인정
-#   JS/TS: "Node.js", "Vue.js"의 ".js"에 걸려 JavaScript로 잘못 집계되던 문제
-TECH_KEYWORDS = {
-    # 언어
-    "Python": [r"python", r"파이썬"],
-    "Java": [r"\bjava\b", r"자바(?!\s*스크립트)"],
-    "JavaScript": [r"javascript", r"(?<![\w.])js\b", r"자바스크립트"],
-    "TypeScript": [r"typescript", r"(?<![\w.])ts\b", r"타입스크립트"],
-    "Kotlin": [r"kotlin", r"코틀린"],
-    "Swift": [r"swift"],
-    "Go": [r"\bgolang\b", r"(?-i:\bGo\b)"],
-    "C++": [r"c\+\+", r"\bcpp\b"],
-    "C#": [r"c#"],
-    "Scala": [r"scala"],
-    "Rust": [r"\brust\b"],
-    "PHP": [r"\bphp\b"],
-    "Ruby": [r"\bruby\b", r"루비"],
-    "R": [r"\bR언어\b", r"\bR프로그래밍\b"],
-
-    # 백엔드 프레임워크
-    "Spring": [r"spring\s*boot", r"\bspring\b", r"스프링"],
-    "Django": [r"django", r"장고"],
-    "FastAPI": [r"fastapi"],
-    "Flask": [r"\bflask\b"],
-    "Node.js": [r"node\.js", r"nodejs"],
-    "NestJS": [r"nestjs", r"nest\.js"],
-    "Express": [r"express\.js", r"\bexpress\b"],
-    "Laravel": [r"laravel"],
-
-    # 프론트엔드
-    "React": [r"\breact\b", r"리액트"],
-    "Vue": [r"\bvue\b", r"(?<![가-힣])뷰(?:를|는|와|과|로|가|도|의)?(?![가-힣])"],
-    "Angular": [r"angular", r"앵귤러"],
-    "Next.js": [r"next\.js", r"nextjs"],
-    "Nuxt.js": [r"nuxt\.js", r"nuxtjs"],
-    "Svelte": [r"svelte"],
-
-    # DB
-    "MySQL": [r"mysql"],
-    "PostgreSQL": [r"postgresql", r"postgres"],
-    "MongoDB": [r"mongodb", r"몽고"],
-    "Redis": [r"\bredis\b"],
-    "Elasticsearch": [r"elasticsearch", r"elastic"],
-    "Oracle": [r"\boracle\b", r"오라클"],
-    "MariaDB": [r"mariadb"],
-    "SQLite": [r"sqlite"],
-    "Cassandra": [r"cassandra"],
-
-    # 클라우드
-    "AWS": [r"\baws\b", r"amazon web", r"아마존"],
-    "GCP": [r"\bgcp\b", r"google cloud", r"구글 클라우드"],
-    "Azure": [r"\bazure\b", r"애저"],
-    "NCP": [r"\bncp\b", r"네이버 클라우드"],
-
-    # DevOps
-    "Docker": [r"docker", r"도커"],
-    "Kubernetes": [r"kubernetes", r"\bk8s\b", r"쿠버네티스"],
-    "Linux": [r"linux", r"리눅스"],
-    "Terraform": [r"terraform"],
-    "Jenkins": [r"jenkins"],
-    "GitHub Actions": [r"github\s*actions"],
-    "Ansible": [r"ansible"],
-    "Nginx": [r"nginx"],
-
-    # 데이터
-    "Pandas": [r"pandas"],
-    "Spark": [r"\bspark\b"],
-    "Kafka": [r"kafka", r"카프카"],
-    "Airflow": [r"airflow"],
-    "Hadoop": [r"hadoop"],
-    "Hive": [r"\bhive\b"],
-    "Flink": [r"\bflink\b"],
-    "dbt": [r"\bdbt\b"],
-
-    # ML/AI
-    "TensorFlow": [r"tensorflow"],
-    "PyTorch": [r"pytorch"],
-    "Scikit-learn": [r"scikit.learn", r"sklearn"],
-    "AI": [r"\bAI\b", r"인공지능", r"AI\s*개발", r"AI\s*서비스", r"AI\s*엔지니어"],
-    "LLM": [r"\bllm\b", r"거대언어모델", r"chatgpt", r"gpt"],
-    "MLOps": [r"mlops"],
-
-    # 기타
-    "REST API": [r"rest\s*api", r"restful"],
-    "MSA": [r"\bmsa\b", r"마이크로서비스"],
-    "CI/CD": [r"ci/cd", r"\bcicd\b"],
-    "Git": [r"\bgit\b", r"깃"],
-    "Jira": [r"\bjira\b"],
-    "GraphQL": [r"graphql"],
-    "gRPC": [r"\bgrpc\b"],
-    "WebSocket": [r"websocket", r"웹소켓"],
-}
+from taxonomy import TECH_KEYWORDS  # 기술 사전은 taxonomy.py에서 관리한다
 
 # ── 섹션 제목 ─────────────────────────────────────
 # 실제 사람인 공고 본문을 확인해 보니 "주요업무 / 자격요건 / 우대사항" 같은
@@ -164,10 +69,24 @@ def extract_keywords(text):
     return found
 
 
-def process_postings():
-    """title + content 합쳐서 키워드 추출 후 저장"""
+def process_postings(rebuild=False):
+    """
+    title + content 합쳐서 키워드 추출 후 저장.
+
+    기본: 아직 키워드가 없는 공고만 처리한다(매일 자동 실행용).
+    rebuild=True: tech_keywords를 비우고 전체 공고를 새 기술 사전으로 다시 분석한다.
+                  사전(taxonomy.py)을 바꾼 뒤 한 번 실행한다.
+
+    키워드 추출은 메모리에서 끝내고, DB에는 한꺼번에 저장한다. 클라우드 DB는 요청 한 번마다
+    네트워크를 왕복하므로 키워드를 하나씩 저장하면 수만 번 왕복해 느리고, 그 사이 인터넷이
+    끊기면 실패한다. 저장은 하나의 트랜잭션이라 중간에 실패하면 전체가 되돌아가고
+    기존 키워드는 그대로 남는다.
+    """
     conn = get_connection()
     cur = conn.cursor()
+
+    if rebuild:
+        cur.execute("TRUNCATE TABLE tech_keywords")
 
     # 아직 처리 안 된 공고 가져오기 (title도 함께)
     cur.execute("""
@@ -182,8 +101,8 @@ def process_postings():
     postings = cur.fetchall()
     print(f"처리할 공고: {len(postings)}개")
 
-    total_keywords = 0
-    for i, (posting_id, job_category, title, content) in enumerate(postings):
+    rows = []  # (posting_id, keyword, is_required)
+    for posting_id, job_category, title, content in postings:
         try:
             # title + content 합쳐서 분석
             full_text = f"{title or ''} {content or ''}"
@@ -195,36 +114,40 @@ def process_postings():
             required_keywords = extract_keywords(required_text)
             preferred_keywords = extract_keywords(preferred_text)
             all_keywords = required_keywords | preferred_keywords
-
-            if not all_keywords:
-                continue
-
-            # 저장 (필수 섹션에도 나온 키워드는 필수로 본다)
-            for keyword in all_keywords:
-                is_required = keyword in required_keywords
-                cur.execute("""
-                    INSERT INTO tech_keywords
-                        (posting_id, keyword, is_required, extracted_at)
-                    VALUES (%s, %s, %s, NOW())
-                    ON CONFLICT DO NOTHING
-                """, (posting_id, keyword, is_required))
-                total_keywords += 1
-
-            if (i + 1) % 100 == 0:
-                conn.commit()
-                print(f"  {i+1}/{len(postings)} 처리 중...")
-
         except Exception as e:
+            if rebuild:
+                # 전체 재분석은 전부 성공하거나 전부 취소한다(TRUNCATE까지 되돌아감)
+                print(f"  공고 {posting_id} 처리 오류로 전체 재분석을 취소합니다: {e}")
+                conn.rollback()
+                raise
             print(f"  공고 {posting_id} 처리 오류: {e}")
-            conn.rollback()
             continue
+
+        # 필수 섹션에도 나온 키워드는 필수로 본다
+        for keyword in all_keywords:
+            rows.append((posting_id, keyword, keyword in required_keywords))
+
+    print(f"키워드 추출 완료: {len(postings)}개 공고에서 {len(rows)}개, DB에 저장합니다...")
+    if rows:
+        execute_values(
+            cur,
+            """
+            INSERT INTO tech_keywords (posting_id, keyword, is_required, extracted_at)
+            VALUES %s
+            ON CONFLICT DO NOTHING
+            """,
+            rows,
+            template="(%s, %s, %s, NOW())",
+            page_size=1000,
+        )
 
     conn.commit()
     cur.close()
     conn.close()
-    print(f"\n완료! 총 {total_keywords}개 키워드 저장")
+    print(f"\n완료! 총 {len(rows)}개 키워드 저장")
 
 
 if __name__ == "__main__":
-    print("=== 키워드 추출 시작 ===")
-    process_postings()
+    rebuild = "--rebuild" in sys.argv
+    print("=== 키워드 추출 시작" + (" (전체 재분석)" if rebuild else "") + " ===")
+    process_postings(rebuild=rebuild)

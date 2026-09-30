@@ -3,6 +3,7 @@ import plotly.express as px
 import pandas as pd
 from db_connect import get_connection
 import plotly.graph_objects as go
+from taxonomy import TECH_TAXONOMY
 
 st.set_page_config(page_title="기술 스택 트렌드 분석", layout="wide")
 
@@ -44,9 +45,33 @@ def load_summary():
     conn.close()
     return total_postings, total_keywords, top_keyword
 
+@st.cache_data(ttl=600)
+def load_dictionary_watch():
+    """사전 점검 기록(커버리지 이력, 검토 대기 후보). 아직 테이블이 없거나 비어 있으면 (None, None)."""
+    conn = get_connection()
+    try:
+        coverage = pd.read_sql("""
+            SELECT measured_at, dictionary_size, postings_with_text, postings_covered, coverage_ratio
+            FROM dictionary_coverage
+            ORDER BY measured_at
+        """, conn)
+        candidates = pd.read_sql("""
+            SELECT term, doc_count, doc_ratio, example, first_seen, last_seen
+            FROM tech_candidates
+            ORDER BY doc_count DESC, term
+        """, conn)
+    except Exception:
+        return None, None
+    finally:
+        conn.close()
+    return coverage, candidates
+
+# 요구 비율의 의미 (analyzer.py의 ONLY_POSTINGS_WITH_TECH = True 기준)
+RATIO_NOTE = "요구 비율 = 기술 스택이 언급된 공고 중, 해당 기술이 나온 공고의 비율"
+
 # ── 네비게이션 ────────────────────────────────
 st.sidebar.title("기술 스택 트렌드")
-page = st.sidebar.radio("메뉴", ["메인 대시보드", "트렌드 분석", "필수·우대 분석", "수요 예측"])
+page = st.sidebar.radio("메뉴", ["메인 대시보드", "트렌드 분석", "필수·우대 분석", "수요 예측", "사전 점검"])
 
 JOB_CATEGORIES = [
     "백엔드 개발자", "프론트엔드 개발자", "데이터 엔지니어",
@@ -56,7 +81,8 @@ JOB_CATEGORIES = [
 # ── SCREEN-01 메인 대시보드 ───────────────────
 if page == "메인 대시보드":
     st.title("📊 기술 스택 트렌드 분석 시스템")
-    st.caption("사람인·원티드 채용공고 기반 기술 스택 트렌드 분석")
+    st.caption("사람인 채용공고 기반 기술 스택 트렌드 분석 (원티드는 수집량이 매우 적어 참고용)")
+    st.caption(RATIO_NOTE)
 
     job_category = st.selectbox("직무 선택", JOB_CATEGORIES)
 
@@ -130,6 +156,7 @@ if page == "메인 대시보드":
 elif page == "트렌드 분석":
     st.title("📈 트렌드 분석")
     st.caption("직무별 기술 스택 주별 요구 비율 변화")
+    st.caption(RATIO_NOTE)
 
     job_category = st.selectbox("직무 선택", JOB_CATEGORIES)
     df = load_trend_stats()
@@ -392,3 +419,72 @@ elif page == "수요 예측":
                 cols[i].metric(label=kw, value=f"{curr_ratio:.1f}%")
 
         st.info("⚠️ 예측 결과는 참고용이며 외부 요인에 의한 급격한 변화는 반영되지 않을 수 있습니다.")
+
+# ── SCREEN-05 사전 점검 ───────────────────────
+elif page == "사전 점검":
+    st.title("🔎 사전 점검")
+    st.caption("키워드 사전에 없는 기술이 공고에 들어 있을 때 어떻게 다루는지 — 탐지 → 측정 → 보관 → 검토·반영")
+
+    coverage_df, candidates_df = load_dictionary_watch()
+
+    if coverage_df is None or coverage_df.empty:
+        st.info("아직 사전 점검 기록이 없습니다. 파이프라인이 한 번 실행되면 표시됩니다.")
+    else:
+        latest = coverage_df.iloc[-1]
+        with_text = int(latest["postings_with_text"])
+        covered = int(latest["postings_covered"])
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("기술 사전", f"{int(latest['dictionary_size'])}개")
+        col2.metric("기술 커버리지", f"{float(latest['coverage_ratio']) * 100:.1f}%",
+                    help="본문이 있는 공고 중 기술이 하나라도 잡힌 공고의 비율")
+        col3.metric("기술이 안 잡힌 공고", f"{with_text - covered:,}건",
+                    help="사전에 없는 기술이 있거나, 개발 직무가 아닌 공고")
+        col4.metric("검토 대기 후보", f"{len(candidates_df)}개")
+
+        if len(coverage_df) >= 2:
+            chart_df = coverage_df.copy()
+            chart_df["커버리지(%)"] = (chart_df["coverage_ratio"].astype(float) * 100).round(1)
+            fig = px.line(chart_df, x="measured_at", y="커버리지(%)", markers=True,
+                          hover_data=["dictionary_size"], title="사전 점검 시점별 커버리지",
+                          labels={"measured_at": "점검 시각", "dictionary_size": "사전 크기"})
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.caption("커버리지 기록이 2회 이상 쌓이면 변화 그래프가 표시됩니다.")
+
+    st.divider()
+    st.subheader("검토 대기 후보 (사전에 없는 표기)")
+    st.caption("공고 수가 많은 순입니다. 🆕는 최근 7일 안에 처음 나타난 후보입니다.")
+    if candidates_df is None or candidates_df.empty:
+        st.success("검토 대기 후보가 없습니다.")
+    else:
+        recent_start = pd.Timestamp.today().normalize() - pd.Timedelta(days=7)
+        shown = candidates_df.copy()
+        shown["공고 비율(%)"] = (shown["doc_ratio"].astype(float) * 100).round(2)
+        shown["신규"] = shown["first_seen"].apply(
+            lambda d: "🆕" if pd.Timestamp(d) >= recent_start else "")
+        st.dataframe(
+            shown[["신규", "term", "doc_count", "공고 비율(%)", "example"]].rename(
+                columns={"term": "후보", "doc_count": "공고 수", "example": "예문"}).head(50),
+            use_container_width=True, hide_index=True
+        )
+
+    st.divider()
+    st.subheader("처리 방식")
+    st.markdown(
+        "1. **탐지** — 공고 본문에서 사전에 없는 영문 기술 표기를 찾아 공고 수 순으로 정리합니다.\n"
+        "2. **측정** — 본문이 있는 공고 중 기술이 하나라도 잡힌 비율(커버리지)을 매번 기록합니다.\n"
+        "3. **보관** — 검토 대기 후보를 저장하고, 처음 나타난 날짜를 남겨 새로 등장한 기술을 알아봅니다.\n"
+        "4. **반영** — 개발 기술이면 사전에 추가하고 전체 공고를 소급 재분석합니다. "
+        "개발 기술이 아니면 검토 이력에 제외로 기록하고 다음 점검부터 후보에서 뺍니다.\n\n"
+        "후보가 전체 공고의 2% 미만이 되면 사전 확장을 멈춥니다."
+    )
+
+    st.subheader("기술 사전 구성 (대분류 → 세부 기술)")
+    st.dataframe(
+        pd.DataFrame([
+            {"대분류": category, "기술 수": len(techs), "세부 기술": ", ".join(techs)}
+            for category, techs in TECH_TAXONOMY.items()
+        ]),
+        use_container_width=True, hide_index=True
+    )

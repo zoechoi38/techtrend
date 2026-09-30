@@ -1,5 +1,5 @@
 """
-매일 실행하는 전체 파이프라인: 수집 -> 키워드 추출 -> 트렌드 통계 -> 변화율 -> 수요 예측.
+매일 실행하는 전체 파이프라인: 수집 -> 키워드 추출 -> 사전 점검 -> 트렌드 통계 -> 변화율 -> 수요 예측.
 
 한 단계가 실패해도 로그를 남기고 다음 단계로 넘어간다. 예를 들어 사이트가 응답하지 않아
 수집이 실패해도, 이미 쌓인 데이터로 통계와 예측은 계속 최신 상태로 유지할 수 있다.
@@ -10,6 +10,7 @@ import logging
 
 from collector import run_collection
 from processor import process_postings
+from dictionary_watch import update_dictionary_watch
 from analyzer import calculate_trend_stats, calculate_trend_change
 from forecaster import run_forecast
 
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 STEPS = [
     ("수집", run_collection),
     ("키워드 추출", process_postings),
+    ("사전 점검", update_dictionary_watch),
     ("트렌드 통계", calculate_trend_stats),
     ("변화율 계산", calculate_trend_change),
     ("수요 예측", run_forecast),

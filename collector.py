@@ -24,7 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 원티드는 현재 수집이 거의 되지 않는다(DB에 43건). 결정이 나기 전까지는 그대로 켜 둔다.
-COLLECT_WANTED = True
+COLLECT_WANTED = False
 
 JOB_CATEGORIES = {
     "백엔드 개발자": "백엔드",

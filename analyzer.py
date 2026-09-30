@@ -9,6 +9,13 @@ from db_connect import get_connection
 # 수집 기간이 늘어나면 이 날짜를 유지한 채 구간이 자연스럽게 길어진다.
 SERIES_START = date(2026, 8, 3)
 
+# True: 기술이 하나도 언급되지 않은 공고는 비율의 분모에서 뺀다.
+#   검색 결과에는 영업·제조·품질·하드웨어 설계처럼 개발 직무가 아닌 공고가 섞여 있고,
+#   이런 공고를 분모에 넣으면 "개발 공고 중 이 기술을 요구하는 비율"이 실제보다 낮게 나온다.
+#   그래서 비율의 의미는 "기술 스택이 언급된 공고 중 이 기술이 나온 공고의 비율"이 된다.
+# False: 수집한 모든 공고를 분모로 쓴다.
+ONLY_POSTINGS_WITH_TECH = True
+
 
 def analysis_weeks(today=None, start=SERIES_START):
     """
@@ -96,11 +103,24 @@ def calculate_trend_stats(today=None):
         return
     df = pd.DataFrame(rows, columns=["job_category", "year_month", "keyword", "is_required"])
 
-    cur.execute("""
-        SELECT job_category,
-               TO_CHAR(DATE_TRUNC('week', posted_date), 'YYYY-MM-DD') AS year_month,
+    has_tech = "EXISTS (SELECT 1 FROM tech_keywords t WHERE t.posting_id = p.posting_id)"
+    cur.execute(f"""
+        SELECT COUNT(*), COUNT(*) FILTER (WHERE {has_tech})
+        FROM job_postings p
+    """)
+    all_postings, tech_postings = cur.fetchone()
+    if ONLY_POSTINGS_WITH_TECH:
+        print(f"분모 기준: 기술이 언급된 공고 {tech_postings}개 (전체 {all_postings}개 중 "
+              f"{all_postings - tech_postings}개 제외)")
+    else:
+        print(f"분모 기준: 수집한 모든 공고 {all_postings}개")
+
+    cur.execute(f"""
+        SELECT p.job_category,
+               TO_CHAR(DATE_TRUNC('week', p.posted_date), 'YYYY-MM-DD') AS year_month,
                COUNT(*) AS total
-        FROM job_postings
+        FROM job_postings p
+        {"WHERE " + has_tech if ONLY_POSTINGS_WITH_TECH else ""}
         GROUP BY 1, 2
     """)
     total_df = pd.DataFrame(cur.fetchall(), columns=["job_category", "year_month", "total_postings"])
